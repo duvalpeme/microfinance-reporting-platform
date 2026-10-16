@@ -1,0 +1,10 @@
+# Copie ce fichier en profiles.yml (ignoré par Git) :
+#   cp pipeline/dbt_project/profiles.yml.example pipeline/dbt_project/profiles.yml
+# Le chemin est relatif au dossier depuis lequel dbt est lancé : la RACINE du dépôt.
+imf_reporting:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: data/warehouse/imf.duckdb
+      threads: 4

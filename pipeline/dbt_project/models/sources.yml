@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Données brutes ingérées par pipeline/bronze/ingest.py (toutes colonnes en texte).
+    schema: bronze
+    tables:
+      - name: agences
+      - name: agents
+      - name: produits
+      - name: plan_comptable
+      - name: clients
+      - name: prets
+      - name: echeanciers
+      - name: remboursements
+      - name: epargne_comptes
+      - name: epargne_mouvements
+      - name: balance_comptable
+      - name: _meta
+
+  - name: quality
+    description: Résultats des contrôles qualité (quality/run_checks.py).
+    schema: quality
+    tables:
+      - name: violations

@@ -1,0 +1,93 @@
+version: 2
+
+models:
+  - name: silver_agences
+    columns:
+      - name: code_agence
+        data_tests: [unique, not_null]
+
+  - name: silver_clients
+    description: Clients nettoyés (doublons retirés, agence normalisée). dq_regles liste les règles qualité déclenchées.
+    columns:
+      - name: id_client
+        data_tests: [unique, not_null]
+      - name: type_client
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['INDIVIDUEL', 'GROUPE']
+      - name: code_agence
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_agences')
+                field: code_agence
+
+  - name: silver_prets
+    columns:
+      - name: id_pret
+        data_tests: [unique, not_null]
+      - name: id_client
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('silver_clients')
+                field: id_client
+      - name: id_produit
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('silver_produits')
+                field: id_produit
+      - name: statut
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['EN_COURS', 'SOLDE', 'CONTENTIEUX']
+      - name: montant_decaisse
+        data_tests: [not_null]
+
+  - name: silver_produits
+    columns:
+      - name: id_produit
+        data_tests: [unique, not_null]
+
+  - name: silver_echeanciers
+    columns:
+      - name: id_echeance
+        data_tests: [unique, not_null]
+      - name: id_pret
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('silver_prets')
+                field: id_pret
+
+  - name: silver_remboursements
+    description: Paiements valides. Les paiements rejetés sont dans quarantine.quarantine_remboursements.
+    columns:
+      - name: id_remboursement
+        data_tests: [unique, not_null]
+      - name: id_pret
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('silver_prets')
+                field: id_pret
+
+  - name: silver_epargne_comptes
+    columns:
+      - name: id_compte
+        data_tests: [unique, not_null]
+
+  - name: silver_epargne_mouvements
+    columns:
+      - name: id_mouvement
+        data_tests: [unique, not_null]
+      - name: id_compte
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('silver_epargne_comptes')
+                field: id_compte
