@@ -1,0 +1,276 @@
+# =====================================================================================
+# Catalogue des règles de contrôle qualité - couche BRONZE
+# =====================================================================================
+# Chaque règle est une requête SQL (DuckDB) qui renvoie UNE colonne `cle` : l'identifiant
+# de chaque ligne en infraction. Les colonnes bronze sont en texte (voir ingest.py) :
+# on utilise try_cast pour typer sans faire échouer la requête.
+#
+# Champs :
+#   id                : identifiant stable de la règle
+#   table             : table concernée (celle où l'anomalie est constatée)
+#   anomaly_type      : type d'anomalie visé (sert à mesurer le taux de détection)
+#   dimension         : complétude | unicité | validité | cohérence | intégrité
+#   severite          : critique | majeure | mineure
+#   action            : traitement appliqué en silver
+#                         quarantaine  -> la ligne est retirée du silver et conservée dans quarantine
+#                         dedoublonnage-> on garde une seule occurrence
+#                         correction   -> valeur corrigée/normalisée, ligne conservée
+#                         signalement  -> ligne conservée telle quelle, marquée (dq_regles)
+#   bloque_publication: true -> tant que la violation subsiste, aucun état réglementaire n'est publié
+#   proprietaire      : qui tranche en cas de doute (voir docs/gouvernance.md)
+#
+# Placeholder disponible dans le SQL : {{ARRETE}} (date d'arrêté, depuis bronze._meta).
+# =====================================================================================
+
+rules:
+
+  # ----------------------------------------------------------------------- CLIENTS
+  - id: CLI_01_DOUBLON
+    table: clients
+    anomaly_type: doublon_client
+    dimension: unicité
+    severite: majeure
+    action: dedoublonnage
+    bloque_publication: false
+    proprietaire: Responsable clientèle
+    description: >
+      Client individuel en double (même nom, prénom, date de naissance et téléphone,
+      après suppression des accents, de la casse et des espaces). On garde l'identifiant
+      le plus ancien.
+    sql: |
+      WITH k AS (
+        SELECT id_client,
+               row_number() OVER (
+                 PARTITION BY lower(strip_accents(trim(nom))),
+                              lower(strip_accents(trim(prenom))),
+                              date_naissance, telephone
+                 ORDER BY id_client) AS rn
+        FROM bronze.clients
+        WHERE type_client = 'INDIVIDUEL' AND nom IS NOT NULL
+      )
+      SELECT id_client AS cle FROM k WHERE rn > 1
+
+  - id: CLI_02_AGENCE_FORMAT
+    table: clients
+    anomaly_type: code_agence_mal_forme
+    dimension: validité
+    severite: mineure
+    action: correction
+    bloque_publication: false
+    proprietaire: Responsable données
+    description: >
+      Code agence qui n'est pas au format du référentiel (minuscules, tiret, espace)
+      mais devient valide une fois normalisé.
+    sql: |
+      SELECT id_client AS cle
+      FROM bronze.clients
+      WHERE code_agence NOT IN (SELECT code_agence FROM bronze.agences)
+        AND upper(replace(replace(trim(code_agence), '-', ''), ' ', ''))
+            IN (SELECT code_agence FROM bronze.agences)
+
+  - id: CLI_03_AGENCE_INCONNUE
+    table: clients
+    anomaly_type: code_agence_inconnu
+    dimension: intégrité
+    severite: critique
+    action: signalement
+    bloque_publication: true
+    proprietaire: Responsable données
+    description: >
+      Code agence absent du référentiel, même après normalisation. Le client est rattaché
+      à l'agence technique INCONNU en silver (l'encours reste visible), mais les états
+      par agence ne sont pas publiables tant que le rattachement n'est pas résolu.
+    sql: |
+      SELECT id_client AS cle
+      FROM bronze.clients
+      WHERE upper(replace(replace(trim(code_agence), '-', ''), ' ', ''))
+            NOT IN (SELECT code_agence FROM bronze.agences)
+
+  - id: CLI_04_SECTEUR_MANQUANT
+    table: clients
+    anomaly_type: secteur_manquant
+    dimension: complétude
+    severite: mineure
+    action: correction
+    bloque_publication: false
+    proprietaire: Responsable clientèle
+    description: Secteur d'activité non renseigné. Remplacé par NON_RENSEIGNE en silver.
+    sql: |
+      SELECT id_client AS cle
+      FROM bronze.clients
+      WHERE secteur_activite IS NULL OR trim(secteur_activite) = ''
+
+  - id: CLI_05_TELEPHONE
+    table: clients
+    anomaly_type: telephone_invalide
+    dimension: validité
+    severite: mineure
+    action: correction
+    bloque_publication: false
+    proprietaire: Responsable clientèle
+    description: >
+      Téléphone d'un client individuel qui ne respecte pas le format mobile à 9 chiffres
+      commençant par 6. Mis à NULL en silver (la valeur d'origine reste en bronze).
+    sql: |
+      SELECT id_client AS cle
+      FROM bronze.clients
+      WHERE type_client = 'INDIVIDUEL'
+        AND NOT coalesce(regexp_matches(telephone, '^6[0-9]{8}$'), false)
+
+  - id: CLI_06_MINEUR
+    table: clients
+    anomaly_type: client_mineur
+    dimension: cohérence
+    severite: majeure
+    action: signalement
+    bloque_publication: false
+    proprietaire: Responsable conformité
+    description: >
+      Client individuel dont l'âge à l'adhésion est inférieur à 18 ans. Correction manuelle
+      requise (vérification de la pièce d'identité) : le pipeline ne devine pas la bonne date.
+    sql: |
+      SELECT id_client AS cle
+      FROM bronze.clients
+      WHERE type_client = 'INDIVIDUEL'
+        AND try_cast(date_naissance AS DATE) IS NOT NULL
+        AND try_cast(date_naissance AS DATE) + INTERVAL 18 YEAR > try_cast(date_adhesion AS DATE)
+
+  # ----------------------------------------------------------------------- PRÊTS
+  - id: PRE_01_DATE_DECAISSEMENT
+    table: prets
+    anomaly_type: decaissement_avant_adhesion
+    dimension: cohérence
+    severite: majeure
+    action: signalement
+    bloque_publication: false
+    proprietaire: Responsable crédit
+    description: >
+      Date de décaissement antérieure à la date d'adhésion du client. Le prêt est conservé
+      (retirer l'encours fausserait le rapprochement avec la comptabilité) mais marqué.
+    sql: |
+      SELECT p.id_pret AS cle
+      FROM bronze.prets p
+      JOIN bronze.clients c ON c.id_client = p.id_client
+      WHERE try_cast(p.date_decaissement AS DATE) < try_cast(c.date_adhesion AS DATE)
+
+  - id: PRE_02_STATUT
+    table: prets
+    anomaly_type: statut_incoherent
+    dimension: cohérence
+    severite: majeure
+    action: correction
+    bloque_publication: false
+    proprietaire: Responsable crédit
+    description: >
+      Statut SOLDE sans date de solde (ou date de solde sur un prêt non soldé). Le statut
+      est ramené à EN_COURS en silver ; le classement fin (contentieux) est recalculé en gold
+      à partir des retards.
+    sql: |
+      SELECT id_pret AS cle
+      FROM bronze.prets
+      WHERE (statut = 'SOLDE' AND date_solde IS NULL)
+         OR (statut <> 'SOLDE' AND date_solde IS NOT NULL)
+
+  # ----------------------------------------------------------------------- ÉCHÉANCIERS
+  - id: ECH_01_SANS_ECHEANCIER
+    table: echeanciers
+    anomaly_type: pret_sans_echeancier
+    dimension: complétude
+    severite: critique
+    action: signalement
+    bloque_publication: true
+    proprietaire: Responsable crédit
+    description: >
+      Prêt sans aucune échéance : impossible de calculer les retards, le PAR et les provisions
+      pour ce prêt. Bloque la publication des états qualité du portefeuille.
+    sql: |
+      SELECT id_pret AS cle
+      FROM bronze.prets
+      WHERE id_pret NOT IN (SELECT DISTINCT id_pret FROM bronze.echeanciers)
+
+  - id: ECH_02_DOUBLON
+    table: echeanciers
+    anomaly_type: echeance_dupliquee
+    dimension: unicité
+    severite: majeure
+    action: dedoublonnage
+    bloque_publication: false
+    proprietaire: Responsable données
+    description: Ligne d'échéance présente plusieurs fois (même identifiant). Une seule est conservée.
+    sql: |
+      SELECT id_echeance AS cle
+      FROM bronze.echeanciers
+      GROUP BY id_echeance
+      HAVING count(*) > 1
+
+  # ----------------------------------------------------------------------- REMBOURSEMENTS
+  - id: REM_01_MONTANT_NEGATIF
+    table: remboursements
+    anomaly_type: montant_negatif
+    dimension: validité
+    severite: critique
+    action: quarantaine
+    bloque_publication: false
+    proprietaire: Responsable crédit
+    description: >
+      Paiement à montant négatif. On ne sait pas s'il s'agit d'une erreur de signe ou d'une
+      annulation : mise en quarantaine pour décision humaine, sans correction automatique.
+    sql: |
+      SELECT id_remboursement AS cle
+      FROM bronze.remboursements
+      WHERE try_cast(montant_total AS BIGINT) < 0
+
+  - id: REM_02_DOUBLE_PAIEMENT
+    table: remboursements
+    anomaly_type: paiement_double
+    dimension: unicité
+    severite: critique
+    action: quarantaine
+    bloque_publication: false
+    proprietaire: Responsable crédit
+    description: >
+      Paiement identique à un autre (même prêt, échéance, date, montants et canal) sous un
+      autre identifiant. Le plus ancien est conservé, les copies sont mises en quarantaine.
+    sql: |
+      WITH k AS (
+        SELECT id_remboursement,
+               row_number() OVER (
+                 PARTITION BY id_pret, num_echeance, date_paiement,
+                              montant_capital, montant_interets, montant_total, canal
+                 ORDER BY id_remboursement) AS rn
+        FROM bronze.remboursements
+      )
+      SELECT id_remboursement AS cle FROM k WHERE rn > 1
+
+  - id: REM_03_DATE_FUTURE
+    table: remboursements
+    anomaly_type: date_future
+    dimension: validité
+    severite: majeure
+    action: quarantaine
+    bloque_publication: false
+    proprietaire: Responsable crédit
+    description: Date de paiement postérieure à la date d'arrêté des données.
+    sql: |
+      SELECT id_remboursement AS cle
+      FROM bronze.remboursements
+      WHERE try_cast(date_paiement AS DATE) > CAST('{{ARRETE}}' AS DATE)
+
+  - id: REM_04_PRET_INEXISTANT
+    table: remboursements
+    anomaly_type: pret_inexistant
+    dimension: intégrité
+    severite: critique
+    action: quarantaine
+    bloque_publication: false
+    proprietaire: Responsable crédit
+    description: Paiement rattaché à un identifiant de prêt qui n'existe pas.
+    sql: |
+      SELECT id_remboursement AS cle
+      FROM bronze.remboursements
+      WHERE id_pret NOT IN (SELECT id_pret FROM bronze.prets)
+
+  # ----------------------------------------------------------------------- BALANCE
+  # Le rapprochement portefeuille / comptabilité (type d'anomalie : ecart_rapprochement)
+  # est traité en semaine 3, avec la couche gold : il nécessite les encours recalculés
+  # à partir du silver, et son résultat doit être expliqué par les lignes en quarantaine.
