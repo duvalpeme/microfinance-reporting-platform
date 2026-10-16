@@ -1,0 +1,27 @@
+# Environnement virtuel Python
+.venv/
+__pycache__/
+*.pyc
+
+# Données générées (reproductibles avec le script)
+data/raw/
+data/warehouse/
+*.duckdb
+*.duckdb.wal
+
+# Power BI : on versionne le format projet, pas le .pbix
+*.pbix
+
+# Secrets et configuration locale
+.env
+profiles.yml
+.user.yml
+
+# dbt
+target/
+logs/
+dbt_packages/
+
+# Système
+.DS_Store
+Thumbs.db
