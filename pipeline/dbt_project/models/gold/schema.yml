@@ -1,0 +1,76 @@
+version: 2
+
+models:
+  - name: gold_taux_provision
+    description: Barème de provisionnement par tranche de retard (ILLUSTRATIF).
+    columns:
+      - name: tranche_retard
+        data_tests: [unique, not_null]
+
+  - name: gold_encours_pret
+    description: Une ligne par prêt à la date d'arrêté (encours, jours de retard, tranche, provision).
+    columns:
+      - name: id_pret
+        data_tests: [unique, not_null]
+      - name: code_agence
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_agences')
+                field: code_agence
+      - name: tranche_retard
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['A_JOUR', '1-30', '31-90', '91-180', '181-360', '>360']
+      - name: statut_gold
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['SOLDE', 'EN_COURS', 'CONTENTIEUX']
+
+  - name: gold_par_agence
+    columns:
+      - name: code_agence
+        data_tests: [unique, not_null]
+
+  - name: gold_concentration
+    columns:
+      - name: dimension
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['AGENCE', 'PRODUIT', 'SECTEUR', 'TYPE_CLIENT']
+
+  - name: gold_grands_engagements
+    columns:
+      - name: rang
+        data_tests: [unique, not_null]
+
+  - name: gold_rapprochement
+    columns:
+      - name: statut
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['CONFORME', 'INCERTAIN', 'ECART_A_JUSTIFIER', 'A_REPARTIR']
+
+  - name: gold_rapprochement_total
+    columns:
+      - name: date_arrete
+        data_tests: [unique, not_null]
+      - name: statut
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['BOUCLE', 'A_EXPLIQUER', 'INDICATIF']
+
+  - name: gold_statut_publication
+    columns:
+      - name: decision
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['OUVERTE', 'BLOQUEE']

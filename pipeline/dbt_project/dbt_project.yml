@@ -14,3 +14,12 @@ models:
     silver:
       +materialized: table
       +schema: silver
+    gold:
+      +materialized: table
+      +schema: gold
+
+vars:
+  # Écart toléré par agence au rapprochement, en part de l'encours comptable de l'agence
+  seuil_ecart_rapprochement: 0.005
+  # Nombre de derniers arrêtés mensuels rapprochés
+  nb_dates_rapprochement: 3

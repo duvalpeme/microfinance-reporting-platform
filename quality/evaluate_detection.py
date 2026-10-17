@@ -41,10 +41,30 @@ def main():
     truth = pd.read_csv(args.truth, dtype=str)
     con = duckdb.connect(args.db, read_only=True)
     viol = con.execute('SELECT table_source AS "table", cle, anomaly_type, regle_id FROM quality.violations').df()
-    con.close()
 
     # Types d'anomalies qu'une règle du catalogue sait détecter
     couverts = {r["anomaly_type"] for r in yaml.safe_load(open(args.rules, encoding="utf-8"))["rules"]}
+
+    incertains = set()
+
+    # Détections issues de la couche gold : écarts de rapprochement portefeuille / comptabilité
+    try:
+        gold = con.execute("""
+            SELECT 'balance_comptable' AS "table",
+                   strftime(date_arrete, '%Y-%m-%d') || '|' || code_agence || '|CRD_SAINS' AS cle,
+                   'ecart_rapprochement' AS anomaly_type,
+                   'GOLD_RAPPROCHEMENT' AS regle_id
+            FROM gold.gold_rapprochement WHERE statut = 'ECART_A_JUSTIFIER'
+        """).df()
+        viol = pd.concat([viol, gold], ignore_index=True)
+        couverts.add("ecart_rapprochement")
+        incertains = set(con.execute("""
+            SELECT strftime(date_arrete, '%Y-%m-%d') || '|' || code_agence || '|CRD_SAINS'
+            FROM gold.gold_rapprochement WHERE statut = 'INCERTAIN'
+        """).df().iloc[:, 0])
+    except duckdb.Error:
+        pass  # couche gold non construite : le rapprochement reste hors périmètre
+    con.close()
     inj_types = set(truth["type_anomalie"])
     hors_perimetre = sorted(inj_types - couverts)
 
@@ -86,9 +106,13 @@ def main():
               f"{pct(rappel_glob):>9}{pct(prec_glob):>10}"]
     print("\n".join(lines))
     if hors_perimetre:
-        print("\nTypes injectés sans règle de détection (hors périmètre de cette étape) : " + ", ".join(hors_perimetre))
+        print("\nTypes injectés sans règle de détection (couche non construite ou règle absente) : " + ", ".join(hors_perimetre))
 
     manquees = [(r["type_anomalie"], tb, cle) for _, r in res.iterrows() for tb, cle in r["_manquees"]]
+    reserve = [m for m in manquees if m[2] in incertains]
+    if reserve:
+        print(f"\nDont {len(reserve)} écart(s) de rapprochement signalé(s) INCERTAIN plutôt que ferme : "
+              "des prêts à date non fiable (PRE_01) peuvent expliquer l'écart, il reste à examiner.")
     if manquees:
         print(f"\nAnomalies manquées ({len(manquees)}) - extrait :")
         for t, tb, cle in manquees[:10]:
@@ -105,7 +129,7 @@ def main():
             f.write(f"| **Total (types couverts)** | | **{inj_tot}** | **{det_tot}** | **{inj_tot - tp_tot}** | "
                     f"**{fp_tot}** | **{pct(rappel_glob)}** | **{pct(prec_glob)}** |\n")
             if hors_perimetre:
-                f.write("\nTypes injectés sans règle (hors périmètre de cette étape) : " + ", ".join(hors_perimetre) + ".\n")
+                f.write("\nTypes injectés sans règle (couche non construite ou règle absente) : " + ", ".join(hors_perimetre) + ".\n")
         print(f"\nRapport écrit : {args.md}")
 
 
