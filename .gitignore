@@ -25,3 +25,4 @@ dbt_packages/
 # Système
 .DS_Store
 Thumbs.db
+exports/

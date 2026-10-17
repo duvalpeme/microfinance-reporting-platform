@@ -28,12 +28,24 @@ import pandas as pd
 import yaml
 
 
+def write_table(df, path):
+    """Écrit un DataFrame en CSV ou en Parquet (via DuckDB, sans dépendance supplémentaire)."""
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    con = duckdb.connect()
+    con.register("t", df)
+    options = "FORMAT PARQUET" if path.endswith(".parquet") else "FORMAT CSV, HEADER"
+    con.execute(f"COPY t TO '{path.replace(chr(92), '/')}' ({options})")
+    con.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Évaluation de la détection des anomalies")
     ap.add_argument("--db", default="data/warehouse/imf.duckdb")
     ap.add_argument("--truth", default="data/raw/anomalies_injectees.csv")
     ap.add_argument("--rules", default="quality/rules.yml")
     ap.add_argument("--md", default=None, help="écrit aussi le rapport au format Markdown")
+    ap.add_argument("--out", default=None, help="exporte le tableau de détection (.csv ou .parquet)")
     args = ap.parse_args()
 
     if not os.path.exists(args.truth):
@@ -84,6 +96,10 @@ def main():
 
     def pct(x):
         return "n/a" if x is None or pd.isna(x) else f"{x:.1%}"
+
+    colonnes = ["type_anomalie", "regle", "injectees", "detectees", "manquees", "faux_positifs", "rappel", "precision"]
+    if args.out:
+        write_table(res[colonnes] if not res.empty else pd.DataFrame({c: pd.Series(dtype="object") for c in colonnes}), args.out)
 
     if res.empty:
         print("Aucune anomalie injectée et aucune violation détectée : 0 faux positif.")

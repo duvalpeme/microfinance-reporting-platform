@@ -8,6 +8,7 @@ Orchestrateur : exécute la chaîne complète dans l'ordre.
     3. silver   : modèles dbt (nettoyage, dédoublonnage, quarantaine)
     4. tests    : tests dbt sur le silver
     5. rapport  : taux de détection des anomalies injectées
+    6. export   : tables gold au format Parquet pour Power BI (exports/powerbi)
 
 Usage (depuis la racine du projet) :
     python pipeline/run_pipeline.py
@@ -63,6 +64,7 @@ def main():
     run("3. Silver : modèles dbt", dbt("run"))
     run("4. Silver : tests dbt", dbt("test"))
     run("5. Rapport de détection", [sys.executable, "quality/evaluate_detection.py"])
+    run("6. Export pour Power BI", [sys.executable, "pipeline/export_powerbi.py"])
     print(f"\nPipeline terminé en {time.time() - t0:.0f}s")
 
 
